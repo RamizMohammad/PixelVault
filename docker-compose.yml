@@ -1,0 +1,23 @@
+services:
+  pixelvault:
+    build: .
+    container_name: pixelvault
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # persistent storage — survives container restarts
+      - pixelvault_storage:/app/storage
+      - pixelvault_meta:/app/meta
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - proxy_network   # your existing nginx network
+
+volumes:
+  pixelvault_storage:
+  pixelvault_meta:
+
+networks:
+  proxy_network:
+    external: false   # connects to your central_nginxˀˀ
