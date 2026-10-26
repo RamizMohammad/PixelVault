@@ -4,3 +4,7 @@ python-multipart==0.0.9
 aiofiles==24.1.0
 Pillow==10.4.0
 orjson==3.10.7
+google-auth==2.35.0
+requests==2.32.3
+itsdangerous==2.2.0
+python-dotenv==1.0.1

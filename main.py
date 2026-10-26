@@ -6,65 +6,49 @@ GET  /image           → send image_id + variant → get image back
 GET  /image/meta      → send metadata_id → get metadata back
 DELETE /image/{id}    → delete image + all variants
 GET  /health          → server status
+GET  /admin           → admin panel (Google sign-in, allowed emails only)
 """
 
-import uuid
-import hashlib
-import orjson
+import os
 from pathlib import Path
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
-import io
+from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
-# ── Storage layout ─────────────────────────────────────────────────────────────
-# storage/
-#   thumb/   → 150x150  ~15KB  (feed, grid)
-#   medium/  → 720px    ~120KB (post view)
-#   large/   → 1080px   ~350KB (fullscreen)
-# meta/
-#   {meta_id}.json → metadata saved on device, sent back on every request
-
-STORAGE = Path("storage")
-META_DIR = Path("meta")
-META_DIR.mkdir(exist_ok=True)
-
-VARIANTS = {
-    "thumb":  {"max_px": 150,  "quality": 40},
-    "medium": {"max_px": 720,  "quality": 72},
-    "large":  {"max_px": 1080, "quality": 85},
-}
-
-for v in VARIANTS:
-    (STORAGE / v).mkdir(parents=True, exist_ok=True)
+import core
+from core import VARIANTS, STORAGE, parse_id, clean_user_id, read_capped, index
+import admin
 
 # ── App ────────────────────────────────────────────────────────────────────────
-app = FastAPI(title="PixelVault", version="2.0")
+app = FastAPI(title="PixelVault", version=core.VERSION)
 
+# CORS for the public API. Comma-separated list in .env, "*" by default.
+_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=_origins,
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+admin.install(app)
+app.include_router(admin.router)
+app.mount(
+    "/admin/static",
+    StaticFiles(directory=Path(__file__).parent / "static" / "admin"),
+    name="admin-static",
+)
 
-def compress_variant(img: Image.Image, max_px: int, quality: int) -> bytes:
-    clone = img.copy().convert("RGB")
-    clone.thumbnail((max_px, max_px), Image.LANCZOS)
-    buf = io.BytesIO()
-    clone.save(buf, format="JPEG", quality=quality, optimize=True)
-    return buf.getvalue()
 
-def read_meta(meta_id: str) -> dict:
-    path = META_DIR / f"{meta_id}.json"
-    if not path.exists():
-        raise HTTPException(404, f"Metadata not found: {meta_id}")
-    return orjson.loads(path.read_bytes())
+@app.on_event("startup")
+def _backfill_index():
+    added = index.backfill(core.META_DIR)
+    if added:
+        print(f"[pixelvault] indexed {added} existing metadata files")
+
 
 # ── POST /upload ───────────────────────────────────────────────────────────────
 # Client sends raw image
@@ -77,74 +61,24 @@ async def upload(
     file: UploadFile = File(...),
     user_id: str = Query(..., description="User ID from your auth system"),
 ):
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(400, "Empty file")
-
-    try:
-        img = Image.open(io.BytesIO(raw))
-        img.load()
-    except Exception:
-        raise HTTPException(400, "Not a valid image")
-
-    image_id   = str(uuid.uuid4())
-    meta_id    = str(uuid.uuid4())   # separate ID client stores for metadata lookups
-    checksum   = hashlib.md5(raw).hexdigest()
-    orig_w, orig_h = img.size
-    uploaded_at = datetime.now(timezone.utc).isoformat()
-
-    # compress and store all variants
-    variants_meta = {}
-    for name, cfg in VARIANTS.items():
-        data = compress_variant(img, cfg["max_px"], cfg["quality"])
-        (STORAGE / name / f"{image_id}.jpg").write_bytes(data)
-        variants_meta[name] = {
-            "size_kb": round(len(data) / 1024, 1),
-            "path":    f"{name}/{image_id}.jpg",   # internal, not exposed
-        }
-
-    # build metadata — this is what client saves locally
-    meta = {
-        "meta_id":      meta_id,
-        "image_id":     image_id,
-        "user_id":      user_id,
-        "checksum":     checksum,
-        "original_res": f"{orig_w}x{orig_h}",
-        "original_kb":  round(len(raw) / 1024, 1),
-        "uploaded_at":  uploaded_at,
-        "variants":     {
-            name: {
-                "size_kb": v["size_kb"],
-            }
-            for name, v in variants_meta.items()
-        },
-    }
-
-    # store metadata server side too (for /meta lookup)
-    (META_DIR / f"{meta_id}.json").write_bytes(orjson.dumps(meta))
+    user_id = clean_user_id(user_id)
+    raw = await read_capped(file)
+    meta = await run_in_threadpool(core.process_upload, raw, user_id)
 
     # return to client — client MUST save this
     return JSONResponse({
         "ok": True,
-        "meta_id":      meta_id,     # ← save this, use for metadata lookups
-        "image_id":     image_id,    # ← save this, use for image requests
-        "original_res": f"{orig_w}x{orig_h}",
-        "original_kb":  round(len(raw) / 1024, 1),
-        "uploaded_at":  uploaded_at,
-        "variants": {
-            name: {
-                "size_kb": v["size_kb"],
-                # client uses these to know what's available before requesting
-            }
-            for name, v in variants_meta.items()
-        },
-        "hint": "Save meta_id and image_id locally. Use them on next requests."
+        "meta_id":      meta["meta_id"],     # ← save this, use for metadata lookups
+        "image_id":     meta["image_id"],    # ← save this, use for image requests
+        "original_res": meta["original_res"],
+        "original_kb":  meta["original_kb"],
+        "uploaded_at":  meta["uploaded_at"],
+        "variants":     meta["variants"],
+        "hint": "Save meta_id and image_id locally. Use them on next requests.",
     })
 
 
 # ── GET /image ─────────────────────────────────────────────────────────────────
-# Client sends image_id + which variant it wants
-# Server returns the file directly — fast FileResponse with cache headers
 
 @app.get("/image", summary="Get image by image_id + variant")
 async def get_image(
@@ -153,6 +87,7 @@ async def get_image(
 ):
     if variant not in VARIANTS:
         raise HTTPException(400, f"Invalid variant. Choose: {', '.join(VARIANTS)}")
+    image_id = parse_id(image_id, "image_id")
 
     path = STORAGE / variant / f"{image_id}.jpg"
     if not path.exists():
@@ -162,67 +97,41 @@ async def get_image(
         path,
         media_type="image/jpeg",
         headers={
-            # client caches aggressively — same image_id always returns same file
             "Cache-Control": "public, max-age=31536000, immutable",
             "X-Image-Id":    image_id,
             "X-Variant":     variant,
-        }
+        },
     )
 
 
 # ── GET /image/meta ────────────────────────────────────────────────────────────
-# Client lost local metadata? Send meta_id → get it back
-# Also useful for server-side metadata verification
 
 @app.get("/image/meta", summary="Get metadata by meta_id")
 async def get_meta(
     meta_id: str = Query(..., description="meta_id from upload response"),
 ):
-    meta = read_meta(meta_id)
-    return JSONResponse(meta)
+    return JSONResponse(core.read_meta(meta_id))
 
 
 # ── DELETE /image/{image_id} ───────────────────────────────────────────────────
 
 @app.delete("/image/{image_id}", summary="Delete image and all its variants")
 async def delete_image(image_id: str):
-    deleted = []
-    for variant in VARIANTS:
-        path = STORAGE / variant / f"{image_id}.jpg"
-        if path.exists():
-            path.unlink()
-            deleted.append(variant)
-
-    if not deleted:
-        raise HTTPException(404, f"No files found for image_id: {image_id}")
-
-    # also clean up metadata if we can find it
-    for mf in META_DIR.glob("*.json"):
-        m = orjson.loads(mf.read_bytes())
-        if m.get("image_id") == image_id:
-            mf.unlink()
-            break
-
-    return {"ok": True, "deleted": image_id, "variants_removed": deleted}
+    removed = await run_in_threadpool(core.delete_image, image_id)
+    return {"ok": True, "deleted": image_id, "variants_removed": removed}
 
 
 # ── GET /health ────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    total_images = len(list((STORAGE / "thumb").glob("*.jpg")))
-    meta_count   = len(list(META_DIR.glob("*.json")))
-
-    hot_size = sum(
-        f.stat().st_size
-        for v in VARIANTS
-        for f in (STORAGE / v).glob("*.jpg")
-    )
-
+    t = index.totals()
+    hot_kb = sum(t["variant_kb"].values())
     return {
-        "status":          "ok",
-        "total_images":    total_images,
-        "total_meta":      meta_count,
-        "hot_storage_mb":  round(hot_size / 1024 / 1024, 2),
-        "variants":        list(VARIANTS.keys()),
+        "status":         "ok",
+        "version":        core.VERSION,
+        "total_images":   t["images"],
+        "total_meta":     t["images"],
+        "hot_storage_mb": round(hot_kb / 1024, 2),
+        "variants":       list(VARIANTS.keys()),
     }

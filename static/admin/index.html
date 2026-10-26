@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>PixelVault Admin</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232456d3'/%3E%3Crect x='8' y='8' width='7' height='7' rx='1.5' fill='white'/%3E%3Crect x='17' y='8' width='7' height='7' rx='1.5' fill='white' opacity='.6'/%3E%3Crect x='8' y='17' width='7' height='7' rx='1.5' fill='white' opacity='.6'/%3E%3Crect x='17' y='17' width='7' height='7' rx='1.5' fill='white'/%3E%3C/svg%3E">
+  <script>
+    // apply saved theme before paint
+    try { const t = localStorage.getItem('pv-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="/admin/static/app.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="/admin/static/app.js" defer></script>
+</head>
+<body>
+  <div id="boot" class="boot">Loading…</div>
+
+  <!-- Sign in -->
+  <section id="login" class="login" hidden>
+    <div class="login-card">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><rect x="8" y="8" width="7" height="7" rx="1.5" fill="#fff"/><rect x="17" y="8" width="7" height="7" rx="1.5" fill="#fff" opacity=".6"/><rect x="8" y="17" width="7" height="7" rx="1.5" fill="#fff" opacity=".6"/><rect x="17" y="17" width="7" height="7" rx="1.5" fill="#fff"/></svg>
+      <h1>PixelVault Admin</h1>
+      <p>Sign in with an authorized Google account.</p>
+      <div id="login-error" class="alert" hidden></div>
+      <div id="gbtn" class="gbtn-wrap"></div>
+      <div class="login-note">Access is limited to accounts listed in the server's <code>ADMIN_ALLOWED_EMAILS</code>.</div>
+    </div>
+  </section>
+
+  <!-- App -->
+  <div id="shell" class="shell" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><rect x="8" y="8" width="7" height="7" rx="1.5" fill="#fff"/><rect x="17" y="8" width="7" height="7" rx="1.5" fill="#fff" opacity=".6"/><rect x="8" y="17" width="7" height="7" rx="1.5" fill="#fff" opacity=".6"/><rect x="17" y="17" width="7" height="7" rx="1.5" fill="#fff"/></svg>
+        <div><b>PixelVault</b><small>Admin</small></div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot"><span class="status-dot" id="status-dot"></span><span id="status-text">Online</span> · v<span id="version">–</span></div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="btn icon ghost menu-btn" id="menu-btn" aria-label="Menu"></button>
+        <h1 id="page-title">Overview</h1>
+        <div class="spacer"></div>
+        <form class="topsearch" id="topsearch"><span id="topsearch-icon"></span><input type="search" name="q" placeholder="Search image_id, meta_id, user_id…" autocomplete="off"></form>
+        <button class="btn icon ghost" id="theme-btn" aria-label="Toggle theme" title="Toggle theme"></button>
+        <div class="user-chip"><div class="avatar" id="avatar"></div><span class="email" id="user-email"></span></div>
+        <button class="btn sm" id="logout-btn">Sign out</button>
+      </header>
+      <main class="view" id="view"></main>
+    </div>
+  </div>
+
+  <div id="overlay"></div>
+  <div class="toasts" id="toasts"></div>
+</body>
+</html>
