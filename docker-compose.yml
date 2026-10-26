@@ -4,7 +4,7 @@ services:
     container_name: pixelvault
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8006:8006"
     env_file:
       - .env          # GOOGLE_CLIENT_ID, ADMIN_ALLOWED_EMAILS, SESSION_SECRET, ...
     volumes:
@@ -22,4 +22,4 @@ volumes:
 
 networks:
   proxy_network:
-    external: false   # connects to your central_nginx
+    external: true   # connects to your central_nginx
